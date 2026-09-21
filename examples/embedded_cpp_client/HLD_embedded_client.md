@@ -90,7 +90,7 @@ The framework CMake file also still references the removed `recordset.proto`. A 
 
 The standalone template should generate protobuf and gRPC C++ sources into the build tree from `framework/proto`, using pinned versions. When cross-compiling for ARM, build `protoc` and `grpc_cpp_plugin` for the host and use them to generate sources for the NanoPI target. Do not copy generated files into the source tree or use source globs for the protocol target.
 
-**Version pinning decision:** keep gRPC at `v1.43.2` — the same version the framework’s own C++ SDK (`framework/cc/flwr/CMakeLists.txt`) pins. This keeps the example consistent with the SDK and avoids introducing a second gRPC toolchain. The actual fix is to stop fetching Flower from unpinned `main` and to generate the current protos from `framework/proto` instead of compiling the stale checked-in `.cc` files. If a newer gRPC is needed later (e.g., for a newer protobuf feature), that is a separate, deliberate upgrade.
+**Version pinning decision:** pin gRPC to `v1.78.1` (latest stable). The framework's Python dependency is `grpcio>=1.70.0` (`framework/pyproject.toml`); the gRPC wire protocol is stable across versions, so a newer C++ gRPC is compatible. Older gRPC versions do not build with modern toolchains: `v1.43.2` (legacy SDK) fails with GCC 15 (bundled abseil), and `v1.70.1` fails with CMake 4.x (bundled protobuf `utf8_range` `install(EXPORT)`). The actual fix is to stop fetching Flower from unpinned `main` and to generate the current protos from `framework/proto` instead of compiling the stale checked-in `.cc` files. If a newer gRPC is needed later, that is a separate, deliberate upgrade.
 
 4. **ClientApp is not a native C++ process**
 
