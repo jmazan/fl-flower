@@ -33,6 +33,7 @@ from flwr.cli.utils import validate_federation_name
 from flwr.common.config import (
     flatten_dict,
     fuse_dicts,
+    get_app_presentation_metadata,
     get_fab_config,
     get_metadata_from_config,
 )
@@ -712,6 +713,7 @@ def start_run(  # pylint: disable=too-many-branches,too-many-locals,too-many-sta
                 app_type=app_type,
                 added_by=flwr_aid,
                 is_hub_app=is_hub_app,
+                **get_app_presentation_metadata(fab_config),
             )
 
         series_id = request.series_id if request.HasField("series_id") else None
@@ -1662,6 +1664,9 @@ def list_apps(
             app_id=FLOWER_AGENT_APP_ID,
             app_type=TaskType.AGENT_APP,
             is_hub_app=True,
+            display_name="Flower Agent",
+            description="Chat with Flower Agent",
+            color="yellow",
         )
         if limit is not None:
             apps = apps[: limit - 1]
@@ -1697,7 +1702,8 @@ def add_app(
     _validate_federation_membership_in_request(state, account.flwr_aid, federation_id)
     fab_file, verification_dict, _ = _get_remote_fab(fleet_api_type, request.app_id)
     try:
-        app_type = _get_app_type(get_fab_config(fab_file))
+        fab_config = get_fab_config(fab_file)
+        app_type = _get_app_type(fab_config)
     except ValueError as e:
         raise FlowerError(
             ApiErrorCode.INVALID_APP_SPEC,
@@ -1711,6 +1717,7 @@ def add_app(
         app_type=app_type,
         added_by=account.flwr_aid,
         is_hub_app=True,
+        **get_app_presentation_metadata(fab_config),
     )
 
     return AddAppResponse()
