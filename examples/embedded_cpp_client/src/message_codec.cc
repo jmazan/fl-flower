@@ -16,8 +16,11 @@
 #include "message_codec.h"
 #include "parameter_codec.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 
 namespace flwr_local {
 
@@ -46,6 +49,9 @@ constexpr const char* KEY_GETPARAMS_STATUS = "getparametersres.status";
 
 constexpr const char* KEY_STATUS_CODE = "code";
 constexpr const char* KEY_STATUS_MESSAGE = "message";
+
+// Lower bound for a reply TTL when the request has (almost) expired.
+constexpr double MIN_REPLY_TTL_SECONDS = 1.0;
 
 // ---------------------------------------------------------------------------
 // RecordDict helpers
@@ -143,11 +149,24 @@ bool metric_record_get_sint64(const flwr::proto::MetricRecord& record,
   return false;
 }
 
+// Return the item for key, creating it if absent. The SuperLink expects one
+// item per key, so all helpers writing the same key must share it.
+flwr::proto::RecordDict::Item* get_or_add_item(
+    flwr::proto::RecordDict* recorddict, const std::string& key) {
+  for (int i = 0; i < recorddict->items_size(); i++) {
+    if (recorddict->items(i).key() == key) {
+      return recorddict->mutable_items(i);
+    }
+  }
+  flwr::proto::RecordDict::Item* item = recorddict->add_items();
+  item->set_key(key);
+  return item;
+}
+
 // Add a ConfigRecord with a single sint64 value.
 void add_config_sint64(flwr::proto::RecordDict* recorddict,
                        const std::string& key, int64_t value) {
-  flwr::proto::RecordDict::Item* item = recorddict->add_items();
-  item->set_key(key);
+  flwr::proto::RecordDict::Item* item = get_or_add_item(recorddict, key);
   flwr::proto::ConfigRecord::Item* cfg_item =
       item->mutable_config_record()->add_items();
   cfg_item->set_key(KEY_STATUS_CODE);
@@ -157,8 +176,7 @@ void add_config_sint64(flwr::proto::RecordDict* recorddict,
 // Add a ConfigRecord with a single string value.
 void add_config_string(flwr::proto::RecordDict* recorddict,
                        const std::string& key, const std::string& value) {
-  flwr::proto::RecordDict::Item* item = recorddict->add_items();
-  item->set_key(key);
+  flwr::proto::RecordDict::Item* item = get_or_add_item(recorddict, key);
   flwr::proto::ConfigRecord::Item* cfg_item =
       item->mutable_config_record()->add_items();
   cfg_item->set_key(KEY_STATUS_MESSAGE);
@@ -169,8 +187,7 @@ void add_config_string(flwr::proto::RecordDict* recorddict,
 void add_metric_sint64(flwr::proto::RecordDict* recorddict,
                        const std::string& key, const std::string& metric_key,
                        int64_t value) {
-  flwr::proto::RecordDict::Item* item = recorddict->add_items();
-  item->set_key(key);
+  flwr::proto::RecordDict::Item* item = get_or_add_item(recorddict, key);
   flwr::proto::MetricRecord::Item* metric_item =
       item->mutable_metric_record()->add_items();
   metric_item->set_key(metric_key);
@@ -181,8 +198,7 @@ void add_metric_sint64(flwr::proto::RecordDict* recorddict,
 void add_metric_double(flwr::proto::RecordDict* recorddict,
                        const std::string& key, const std::string& metric_key,
                        double value) {
-  flwr::proto::RecordDict::Item* item = recorddict->add_items();
-  item->set_key(key);
+  flwr::proto::RecordDict::Item* item = get_or_add_item(recorddict, key);
   flwr::proto::MetricRecord::Item* metric_item =
       item->mutable_metric_record()->add_items();
   metric_item->set_key(metric_key);
@@ -203,8 +219,7 @@ void add_config_string_value(flwr::proto::RecordDict* recorddict,
                              const std::string& key,
                              const std::string& cfg_key,
                              const std::string& value) {
-  flwr::proto::RecordDict::Item* item = recorddict->add_items();
-  item->set_key(key);
+  flwr::proto::RecordDict::Item* item = get_or_add_item(recorddict, key);
   flwr::proto::ConfigRecord::Item* cfg_item =
       item->mutable_config_record()->add_items();
   cfg_item->set_key(cfg_key);
@@ -241,6 +256,33 @@ Config config_from_record(const flwr::proto::ConfigRecord& record) {
 // Message handlers
 // ---------------------------------------------------------------------------
 
+// Build a reply to `incoming`. created_at is set to now and ttl is capped at
+// the time left on the request, mirroring Python's Message.create_reply.
+// The SuperLink drops replies without these fields.
+flwr::proto::Message make_reply(const flwr::proto::Message& incoming,
+                                uint64_t local_node_id,
+                                flwr::proto::RecordDict content) {
+  const double now =
+      std::chrono::duration<double>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  const double time_left =
+      incoming.metadata().created_at() + incoming.metadata().ttl() - now;
+
+  flwr::proto::Message reply;
+  flwr::proto::Metadata* md = reply.mutable_metadata();
+  md->set_run_id(incoming.metadata().run_id());
+  md->set_src_node_id(local_node_id);
+  md->set_dst_node_id(incoming.metadata().src_node_id());
+  md->set_reply_to_message_id(incoming.metadata().message_id());
+  md->set_group_id(incoming.metadata().group_id());
+  md->set_message_type(incoming.metadata().message_type());
+  md->set_created_at(now);
+  md->set_ttl(std::max(time_left, MIN_REPLY_TTL_SECONDS));
+  *reply.mutable_content() = std::move(content);
+  return reply;
+}
+
 // get_parameters: reply with getparametersres.parameters + status.
 flwr::proto::Message* handle_get_parameters(const flwr::proto::Message& incoming,
                                             uint64_t local_node_id,
@@ -253,18 +295,8 @@ flwr::proto::Message* handle_get_parameters(const flwr::proto::Message& incoming
   add_config_sint64(&content, KEY_GETPARAMS_STATUS, 0);  // Code.OK
   add_config_string(&content, KEY_GETPARAMS_STATUS, "Success");
 
-  flwr::proto::Message reply;
-  reply.mutable_metadata()->set_run_id(incoming.metadata().run_id());
-  reply.mutable_metadata()->set_src_node_id(local_node_id);
-  reply.mutable_metadata()->set_dst_node_id(incoming.metadata().src_node_id());
-  reply.mutable_metadata()->set_reply_to_message_id(
-      incoming.metadata().message_id());
-  reply.mutable_metadata()->set_group_id(incoming.metadata().group_id());
-  reply.mutable_metadata()->set_ttl(incoming.metadata().ttl());
-  reply.mutable_metadata()->set_message_type(incoming.metadata().message_type());
-  *reply.mutable_content() = content;
-
-  return new flwr::proto::Message(reply);
+  return new flwr::proto::Message(
+      make_reply(incoming, local_node_id, std::move(content)));
 }
 
 // train: decode fitins, call trainer->fit, reply with fitres.
@@ -305,18 +337,8 @@ flwr::proto::Message* handle_train(const flwr::proto::Message& incoming,
     add_config_string_value(&reply_content, KEY_FITRES_METRICS, key, value);
   }
 
-  flwr::proto::Message reply;
-  reply.mutable_metadata()->set_run_id(incoming.metadata().run_id());
-  reply.mutable_metadata()->set_src_node_id(local_node_id);
-  reply.mutable_metadata()->set_dst_node_id(incoming.metadata().src_node_id());
-  reply.mutable_metadata()->set_reply_to_message_id(
-      incoming.metadata().message_id());
-  reply.mutable_metadata()->set_group_id(incoming.metadata().group_id());
-  reply.mutable_metadata()->set_ttl(incoming.metadata().ttl());
-  reply.mutable_metadata()->set_message_type(incoming.metadata().message_type());
-  *reply.mutable_content() = reply_content;
-
-  return new flwr::proto::Message(reply);
+  return new flwr::proto::Message(
+      make_reply(incoming, local_node_id, std::move(reply_content)));
 }
 
 // evaluate: decode evaluateins, call trainer->evaluate, reply with evaluateres.
@@ -357,18 +379,8 @@ flwr::proto::Message* handle_evaluate(const flwr::proto::Message& incoming,
     add_config_string_value(&reply_content, KEY_EVALRES_METRICS, key, value);
   }
 
-  flwr::proto::Message reply;
-  reply.mutable_metadata()->set_run_id(incoming.metadata().run_id());
-  reply.mutable_metadata()->set_src_node_id(local_node_id);
-  reply.mutable_metadata()->set_dst_node_id(incoming.metadata().src_node_id());
-  reply.mutable_metadata()->set_reply_to_message_id(
-      incoming.metadata().message_id());
-  reply.mutable_metadata()->set_group_id(incoming.metadata().group_id());
-  reply.mutable_metadata()->set_ttl(incoming.metadata().ttl());
-  reply.mutable_metadata()->set_message_type(incoming.metadata().message_type());
-  *reply.mutable_content() = reply_content;
-
-  return new flwr::proto::Message(reply);
+  return new flwr::proto::Message(
+      make_reply(incoming, local_node_id, std::move(reply_content)));
 }
 
 }  // namespace

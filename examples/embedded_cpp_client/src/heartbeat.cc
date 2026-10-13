@@ -24,31 +24,30 @@ Heartbeat::Heartbeat(FleetTransport* transport, uint64_t node_id,
                      double interval_seconds)
     : transport_(transport), node_id_(node_id),
       interval_seconds_(interval_seconds) {
-  running_.store(true);
   thread_ = std::thread(&Heartbeat::run, this);
 }
 
 void Heartbeat::stop() {
-  running_.store(false);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_requested_ = true;
+  }
+  cv_.notify_all();
   if (thread_.joinable()) {
     thread_.join();
   }
 }
 
 void Heartbeat::run() {
-  while (running_.load()) {
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(
-            static_cast<int64_t>(interval_seconds_ * 1000.0)));
-
-    if (!running_.load()) {
-      break;
-    }
-
+  const std::chrono::duration<double> interval(interval_seconds_);
+  std::unique_lock<std::mutex> lock(mutex_);
+  while (!stop_requested_) {
+    lock.unlock();
     if (!transport_->send_node_heartbeat(node_id_, interval_seconds_)) {
       std::cerr << "Heartbeat failed" << std::endl;
-      // Phase 4 will add reconnect/backoff handling here.
     }
+    lock.lock();
+    cv_.wait_for(lock, interval, [this] { return stop_requested_; });
   }
 }
 

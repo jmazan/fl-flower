@@ -14,9 +14,7 @@
 // ==============================================================================
 // trainer.cc
 //
-// Linear model trainer implementation. Adapted from the legacy quickstart-cpp
-// example. The `data_indices` initialization bug from the original
-// (initializing with dataset.size() zeroes and then appending) is fixed here.
+// Linear model trainer implementation.
 #include "trainer.h"
 
 #include <algorithm>
@@ -36,7 +34,6 @@ SyntheticDataset::SyntheticDataset(std::vector<double> ms, double b,
     : ms(ms), b(b) {
   std::random_device rd;
   std::mt19937 mt(rd());
-  std::uniform_int_distribution<> distr(-10.0, 10.0);
   std::cout << "True parameters: " << std::endl;
   for (size_t i = 0; i < ms.size(); i++) {
     std::cout << std::fixed << "  m" << i << " = " << ms[i] << std::endl;
@@ -91,7 +88,7 @@ LinearModelTrainer::LinearModelTrainer(int num_iterations,
       validation_dataset(validation_dataset), test_dataset(test_dataset) {
   std::random_device rd;
   std::mt19937 mt(rd());
-  std::uniform_int_distribution<> distr(-10.0, 10.0);
+  std::uniform_int_distribution<int> distr(-10, 10);
   for (int i = 0; i < num_params; i++) {
     pred_weights.push_back(distr(mt));
   }
@@ -186,8 +183,6 @@ FitResult LinearModelTrainer::fit(const Parameters& parameters,
   std::vector<std::vector<double>> data_points =
       training_dataset.get_data_points();
 
-  // Fixed: previously this initialized data_indices with dataset.size() zeroes
-  // and then appended the real indices, producing an incorrect index array.
   std::vector<size_t> data_indices(training_dataset.size());
   for (size_t i = 0; i < training_dataset.size(); i++) {
     data_indices[i] = i;
@@ -307,7 +302,6 @@ EvaluateResult LinearModelTrainer::evaluate(const Parameters& parameters,
   EvaluateResult result;
   result.loss = test_loss;
   result.num_examples = static_cast<int>(test_dataset.size());
-  result.metrics["loss"] = std::to_string(test_loss);
   return result;
 }
 

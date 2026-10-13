@@ -20,6 +20,7 @@
 
 #include "flower_trainer.h"
 
+#include <atomic>
 #include <string>
 
 namespace flwr_local {
@@ -36,8 +37,7 @@ class FlowerClient {
 
   // Run the client lifecycle:
   //   register -> activate -> heartbeat -> poll/reply loop -> deactivate
-  // Blocks until the process is interrupted (SIGINT) or the server instructs
-  // a shutdown.
+  // Blocks until the process is interrupted (SIGINT).
   void run();
 
   // Gracefully stop the client (called from signal handlers).
@@ -47,7 +47,7 @@ class FlowerClient {
   std::string server_address_;
   std::string client_id_;
   Trainer* trainer_;
-  volatile bool running_ = true;
+  std::atomic<bool> running_{true};
 };
 
 }  // namespace flwr_local

@@ -49,13 +49,15 @@ FetchContent_MakeAvailable(gRPC)
 
 set(_PROTOBUF_LIBPROTOBUF libprotobuf)
 set(_REFLECTION grpc++_reflection)
-set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
 set(_GRPC_GRPCPP grpc++)
 if(CMAKE_CROSSCOMPILING)
-    # When cross-compiling for ARM, protoc and grpc_cpp_plugin must be built
-    # for the host and provided via CMAKE_PROGRAM_PATH / PATH.
+    # The protoc and grpc_cpp_plugin built above target the device architecture
+    # and cannot run on the host. Use host binaries from PATH instead. Their
+    # versions must match the bundled protobuf and gRPC ${GRPC_VERSION}.
+    find_program(_PROTOBUF_PROTOC protoc REQUIRED)
     find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin REQUIRED)
 else()
+    set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
     set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 endif()
 
@@ -72,7 +74,8 @@ set(GEN_PROTO_ROOT "${CMAKE_CURRENT_BINARY_DIR}/gen")
 set(GEN_PROTO_DIR "${GEN_PROTO_ROOT}/flwr/proto")
 file(MAKE_DIRECTORY "${GEN_PROTO_DIR}")
 
-# Protos needed by the Fleet client. Order matters: dependencies first.
+# Protos needed by the Fleet client. Each file is compiled on its own; imports
+# resolve through --proto_path.
 set(FLWR_PROTOS
   transport
   error

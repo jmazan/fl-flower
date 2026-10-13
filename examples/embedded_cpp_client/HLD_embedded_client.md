@@ -23,6 +23,75 @@ flwr run <server-app-directory> --stream
 
 The second command starts the remote Python `ServerApp` from a current Flower app directory. The existing `server.py` and `fedavg_cpp.py` are used **as-is** — no Python or server-side changes are in scope for this deliverable. (Note: `flwr run` requires the ServerApp to live in a Flower app directory; setting that up is a deployment prerequisite handled on the server side, not part of the C++ client work.) `flower-server-app` was removed before Flower 1.37; the ServerApp is started with `flwr run` instead. The NanoPI client connects to `<remote-host>:9092`. These insecure commands are for a local proof of concept only. Production requires TLS and SuperNode authentication.
 
+## Current status
+
+Phases 1 and 2 are implemented in `examples/embedded_cpp_client/`. The changes
+below were code-reviewed against the Flower 1.37 protos and the SuperLink
+reply validation. They have not been compiled or run yet.
+
+Corrections applied:
+
+- Replies set `created_at` (unix seconds) and a `ttl` capped by the time left
+  on the request, with a 1-second floor. The SuperLink
+  (`validate_message(is_reply_message=True)`) rejects replies without these
+  fields, so before this fix every reply was dropped and rounds timed out.
+- Each RecordDict key appears once. This removes the duplicate `fitres.status`
+  and `evaluateres.status` items and the one-item-per-metric output.
+- `evaluateres.loss` is sent only as a MetricRecord double. The string `loss`
+  under `metrics` is removed.
+- The heartbeat sends its first beat right away, and `stop()` wakes the thread
+  immediately instead of waiting up to 30 seconds.
+- `FlowerClient::running_` is `std::atomic<bool>`, so it is safe to set from
+  the SIGINT handler.
+- `Reconnect` on pull and push responses is ignored. The Python grpc-rere
+  client ignores it too. The SuperLink sets `reconnect=5` on every push
+  response, so acting on it would re-register after every reply. The real
+  reconnect instruction is `ServerMessage.reconnect_ins`, which the C++ client
+  does not handle yet.
+- CMake: when cross-compiling, `protoc` and `grpc_cpp_plugin` come from the
+  host `PATH`. Presets: `windows-msvc`, `linux-gcc`, `linux-arm64-cross`
+  (toolchain: `cmake/toolchain-arm64.cmake`).
+
+Verified against the framework: the Fleet RPCs and message fields match the
+1.37 protos; `--fleet-api-type grpc-rere` exists; the 30-second heartbeat is
+inside the server's accepted range `[10, 1800]`.
+
+Prerequisite for a live run: `flwr run` needs a Flower app directory with a
+`pyproject.toml`. `examples/quickstart-cpp` has none, so one must be added on
+the server side. This is outside the scope of the client work.
+
+Open items:
+
+- `examples/quickstart-cpp/fedavg_cpp.py` (line ~93) multiplies `num_examples`
+  by `metrics["loss"]`. That string is no longer sent, so the legacy strategy
+  needs `evaluate_res.num_examples * evaluate_res.loss`. It is out of scope and
+  was not changed.
+- Acting on `reconnect_ins` (re-register and backoff) is not implemented.
+- Unverified: whether the server merges or overwrites duplicate RecordDict
+  keys (the one-key fix is correct either way); whether the `client-<id>`
+  public key is always accepted (the server rejects duplicates).
+- Unverified: the cross build. gRPC v1.78.1 may build and run its own `protoc`
+  target for the device architecture during the build. If so, the aarch64
+  build fails and needs a host gRPC or a different provider.
+- Not yet built or run. Phase 1 smoke test and the end-to-end run are pending.
+
+Next steps (plan to one training round):
+
+1. Build on WSL/Linux: `cmake --preset linux-gcc`, then
+   `cmake --build --preset linux-gcc`. Fix any compile errors.
+2. Run end-to-end: `flower-superlink --insecure --fleet-api-type grpc-rere`,
+   a server app directory with `pyproject.toml` that runs `fedavg_cpp.py`, and
+   two clients. Confirm that a round completes and that the server receives the
+   returned weights.
+3. Replace the linear model with the user's DNN/CNN/LSTM library behind
+   `Trainer`. Map each tensor to an ArrayRecord with an agreed shape, and
+   validate tensor count and byte length before training.
+4. Cross-compile for NanoPI: `cmake --preset linux-arm64-cross` with the
+   aarch64 GNU toolchain. Put the host `protoc` and `grpc_cpp_plugin` on
+   `PATH`.
+
+Steps 3 and 4 are future work and are outside the current scope.
+
 ## Scope and location
 
 The deliverable is a **new standalone example** at `examples/embedded_cpp_client/` implementing a native C++ Fleet client. The old `examples/quickstart-cpp/` example is left untouched.
@@ -146,17 +215,27 @@ The client should be split into these modules (new example at `examples/embedded
 
 ```text
 embedded_cpp_client/
+   CMakeLists.txt
+   CMakePresets.json        # windows-msvc, linux-gcc, linux-arm64-cross
+   cmake/
+      toolchain-arm64.cmake # aarch64 Linux cross-compile
    include/
       flower_client.h       # public lifecycle API
       flower_trainer.h      # model/training callback interface
+      fleet_transport.h     # gRPC channel and Fleet stub wrapper
+      heartbeat.h           # background heartbeat
+      message_codec.h       # Message and RecordDict conversion
       parameter_codec.h     # array and parameter serialization
+      trainer.h             # linear model trainer (stub for the ML library)
    src/
+      main.cc               # argument parsing, runs FlowerClient
       flower_client.cc      # register, activate, poll, reply, shutdown
-      fleet_transport.cc    # gRPC channel, Fleet stub, retries
+      fleet_transport.cc    # gRPC channel, Fleet RPCs (no retries yet)
       heartbeat.cc          # background heartbeat
       message_codec.cc      # Message and RecordDict conversion
       parameter_codec.cc    # ArrayRecord conversion
-   proto/                  # generated at build time, not hand-maintained
+      trainer.cc            # linear model trainer
+   proto/                   # generated at build time, not hand-maintained
 ```
 
 **Node identity (first deliverable):** keep it simple — derive a stable identifier from the client ID argument (e.g., `client-<id>` or a hash of it) and use it as the `public_key` for `RegisterNode`/`ActivateNode`. No identity persistence or key management in the first version; that is part of Phase 4.
@@ -186,7 +265,7 @@ repeat:
       call Trainer
       build reply Message with reply metadata
       PushMessages(Node, Message, ObjectTree)
-until shutdown or reconnect instruction
+until shutdown (SIGINT)
 stop heartbeat
 deactivate node
 unregister node when appropriate
@@ -245,7 +324,7 @@ When SuperNode authentication is enabled, registration and every Fleet request a
 - Return a stubbed update from `fit` and a deterministic loss from `evaluate`.
 - Run two NanoPI clients against the existing Python strategy.
 
-### Phase 3: trainer integration (follow-up)
+### Phase 3: trainer integration (future work, not in current scope)
 
 - Replace the stub with the third-party ML library behind `Trainer`.
 - Validate tensor count, dtype, shape, and byte length before calling the library.
@@ -275,11 +354,14 @@ There are two ways to run the Flower server side:
 
 ## Additional issues worth fixing
 
-- `train_SGD` initializes `data_indices` with `dataset.size()` zeroes and then appends the real indices, producing an incorrect index array.
-- Raw doubles are serialized using native endianness in both C++ and Python. Use an explicitly defined format if NanoPI and server architectures may differ.
-- `set_parameters` assumes exactly two tensors and can dereference an invalid iterator if the payload is malformed.
-- The launch instructions in `README.md` describe the old C++ workflow and should be updated to launch the remote Python server separately from the native NanoPI client.
-- The client ID is accepted by the example but is not meaningfully used by the transport. Node identity should be managed by the new Fleet client (derived from the client ID in the first deliverable).
+- Resolved: the `data_indices` initialization bug in the trainer is fixed.
+- Resolved: `set_parameters` checks payload sizes before reading them.
+- Open: the `cpp_double` wire format is raw native `double` bytes, so it relies
+  on a little-endian host. This holds on x86 and aarch64, but nothing enforces
+  it. Use an explicit encoding if a big-endian architecture must be supported.
+- Resolved: the README launch instructions separate the remote SuperLink from
+  the native client.
+- Resolved: the client ID is used to derive the node public key.
 
 ## Recommendation
 

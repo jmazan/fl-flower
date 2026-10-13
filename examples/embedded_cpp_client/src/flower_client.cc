@@ -23,7 +23,8 @@
 // reply messages with reply metadata, push replies.
 //
 // Reconnect/retry, object transfer, TLS, and SuperNode authentication are
-// follow-up phases (3-5).
+// not implemented yet. The Reconnect field on pull/push responses is ignored,
+// as in the Python grpc-rere client.
 #include "flower_client.h"
 #include "fleet_transport.h"
 #include "heartbeat.h"
@@ -93,7 +94,8 @@ void FlowerClient::run() {
   std::cout << "Heartbeat started (interval=" << HEARTBEAT_INTERVAL_SECONDS
             << "s)" << std::endl;
 
-  // Poll loop.
+  // Poll loop. The SuperLink sets Reconnect on every push response, so that
+  // field is not acted on here.
   while (running_) {
     flwr::proto::PullMessagesResponse pull_response;
     if (!transport.pull_messages(activated_node_id, &pull_response)) {

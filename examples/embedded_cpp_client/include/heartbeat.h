@@ -21,7 +21,9 @@
 
 #include "fleet_transport.h"
 
-#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
 #include <thread>
 
 namespace flwr_local {
@@ -34,7 +36,8 @@ class Heartbeat {
   Heartbeat(FleetTransport* transport, uint64_t node_id,
             double interval_seconds);
 
-  // Stop the heartbeat thread and join it.
+  // Stop the heartbeat thread and join it. Returns without waiting out the
+  // current interval.
   void stop();
 
  private:
@@ -43,7 +46,9 @@ class Heartbeat {
   FleetTransport* transport_;
   uint64_t node_id_;
   double interval_seconds_;
-  std::atomic<bool> running_{false};
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool stop_requested_ = false;
   std::thread thread_;
 };
 

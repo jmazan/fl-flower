@@ -44,30 +44,43 @@ is based on:
 
 ## Building the client
 
-The build fetches gRPC `v1.78.1` (pinned, latest stable; the framework's
-Python dependency is `grpcio>=1.70.0`) and generates the current Flower
-protobuf/gRPC sources into the build tree from `framework/proto`. No generated
-files are copied into the source tree.
+Build on Linux or WSL with the `linux-gcc` preset. The build fetches gRPC
+`v1.78.1` and generates the current Flower protobuf/gRPC sources into the build
+tree from `framework/proto`. No generated files are copied into the source
+tree.
 
 ```bash
-cmake -S . -B build
-cmake --build build
+cmake --preset linux-gcc
+cmake --build --preset linux-gcc
 ```
 
-The executable is `build/flwr_client`.
+The executable is `build/linux-gcc/flwr_client`. The `windows-msvc` preset is
+provided for native Windows builds but has not been verified.
 
 ### Cross-compiling for ARM (NanoPI)
 
-When cross-compiling, `protoc` and `grpc_cpp_plugin` must be built for the
-host and made available via `CMAKE_PROGRAM_PATH` (or `PATH`). The generated
-sources are then compiled for the ARM target:
+The `linux-arm64-cross` preset uses `cmake/toolchain-arm64.cmake` for an
+aarch64 Linux target. Requirements:
+
+- The aarch64 GNU cross compiler (`aarch64-linux-gnu-gcc` and
+  `aarch64-linux-gnu-g++`). Pass `-DCMAKE_C_COMPILER` and
+  `-DCMAKE_CXX_COMPILER` to use other compilers.
+- Optional: `-DFLWR_ARM64_SYSROOT=/path/to/target-rootfs` to link against the
+  target's libraries.
+- Host `protoc` and `grpc_cpp_plugin` on `PATH`. They must match the bundled
+  protobuf and gRPC `v1.78.1`, because the build runs them to generate code.
 
 ```bash
-cmake -S . -B build-arm \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/arm-toolchain.cmake \
-  -DCMAKE_PROGRAM_PATH=/path/to/host-bin
-cmake --build build-arm
+cmake --preset linux-arm64-cross
+cmake --build --preset linux-arm64-cross
 ```
+
+The executable is `build/linux-arm64-cross/flwr_client`.
+
+> [!NOTE]\
+> The cross build is not yet verified. gRPC builds its own `protoc` for the
+> target during the build. If that step fails, use a host gRPC package or a
+> different provider.
 
 ## Running the example
 
@@ -81,7 +94,8 @@ flower-superlink --insecure --fleet-api-type grpc-rere --fleet-api-address 0.0.0
 
 The existing `server.py` / `fedavg_cpp.py` from `examples/quickstart-cpp/` are
 used as-is (legacy `Strategy` API, supported through Flower's compatibility
-mode). They must live in a Flower app directory for `flwr run`:
+mode). They must live in a Flower app directory for `flwr run`. `examples/quickstart-cpp`
+has no `pyproject.toml`, so add one to that directory before running `flwr run`:
 
 ```bash
 flwr run <server-app-directory> --stream
@@ -90,8 +104,8 @@ flwr run <server-app-directory> --stream
 ### 3. Start the C++ clients (NanoPI)
 
 ```bash
-build/flwr_client 0 127.0.0.1:9092
-build/flwr_client 1 127.0.0.1:9092
+build/linux-gcc/flwr_client 0 127.0.0.1:9092
+build/linux-gcc/flwr_client 1 127.0.0.1:9092
 ```
 
 The first argument is the client ID (used to derive the node public key), the
@@ -137,23 +151,27 @@ which decodes tensors with `struct.unpack("d", ...)`.
 
 ```text
 embedded_cpp_client/
+   CMakeLists.txt
+   CMakePresets.json        # windows-msvc, linux-gcc, linux-arm64-cross
+   cmake/
+      toolchain-arm64.cmake # aarch64 Linux cross-compile
    include/
       flower_client.h       # public lifecycle API
       flower_trainer.h      # model/training callback interface
-      trainer.h             # linear model trainer (stub for Phase 3)
-      parameter_codec.h     # array and parameter serialization
+      fleet_transport.h     # gRPC channel and Fleet stub wrapper
+      heartbeat.h           # background heartbeat
       message_codec.h       # Message and RecordDict conversion
-      fleet_transport.h     # gRPC channel and Fleet stub
-      hearthbeat.h          # background heartbeat
+      parameter_codec.h     # array and parameter serialization
+      trainer.h             # linear model trainer (stub for the ML library)
    src/
-      main.cc
+      main.cc               # argument parsing, runs FlowerClient
       flower_client.cc      # register, activate, poll, reply, shutdown
-      fleet_transport.cc    # gRPC channel, Fleet stub
-      hearthbeat.cc         # background heartbeat
+      fleet_transport.cc    # gRPC channel, Fleet RPCs (no retries yet)
+      heartbeat.cc          # background heartbeat
       message_codec.cc      # Message and RecordDict conversion
       parameter_codec.cc    # ArrayRecord conversion
       trainer.cc            # linear model trainer
-   proto/                  # generated at build time, not hand-maintained
+   proto/                   # generated at build time, not hand-maintained
 ```
 
 ## Status and next steps
