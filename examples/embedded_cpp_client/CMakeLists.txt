@@ -7,6 +7,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+# OpenSSL 3.0+ provides ECDSA P-256 signing for Fleet requests (see
+# node_credentials.cc). gRPC is told to use this same OpenSSL (gRPC_SSL_PROVIDER
+# "package") so the binary does not link two crypto libraries.
+find_package(OpenSSL 3.0 REQUIRED)
+set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+
+# ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
 # Path to the Flower repository root. Defaults to the parent of this example
@@ -137,6 +146,7 @@ set(FLWR_CLIENT_SRCS
   src/fleet_transport.cc
   src/heartbeat.cc
   src/message_codec.cc
+  src/node_credentials.cc
   src/parameter_codec.cc
   src/trainer.cc
 )
@@ -150,4 +160,5 @@ target_include_directories(${EXECUTABLE_NAME} PUBLIC
 
 target_link_libraries(${EXECUTABLE_NAME}
   flwr_proto
+  OpenSSL::Crypto
 )

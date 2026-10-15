@@ -21,6 +21,7 @@
 #define FLEET_TRANSPORT_H
 
 #include "flwr/proto/fleet.grpc.pb.h"
+#include "node_credentials.h"
 
 #include <grpcpp/grpcpp.h>
 
@@ -30,9 +31,11 @@ namespace flwr_local {
 
 class FleetTransport {
  public:
-  // Establish an insecure gRPC channel to the SuperLink Fleet API.
-  // server_address is "host:port", e.g. "127.0.0.1:9092".
+  // Establish an insecure gRPC channel to the SuperLink Fleet API. Every RPC
+  // is signed with credentials. server_address is "host:port", e.g.
+  // "127.0.0.1:9092".
   FleetTransport(const std::string& server_address,
+                 NodeCredentials credentials,
                  int grpc_max_message_length = 536870912);  // 512 MiB
 
   // Register a node with the given public key. Returns the node ID.
@@ -64,6 +67,11 @@ class FleetTransport {
                      flwr::proto::PushMessagesResponse* response);
 
  private:
+  // Attach the flwr-public-key-bin, flwr-timestamp, and flwr-signature-bin
+  // metadata that the SuperLink requires on every Fleet call.
+  void add_auth_metadata(grpc::ClientContext* context) const;
+
+  NodeCredentials credentials_;
   std::unique_ptr<flwr::proto::Fleet::Stub> stub_;
 };
 

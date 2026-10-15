@@ -22,13 +22,14 @@
 // Phase 2 scope: decode Message/RecordDict, dispatch to the trainer, build
 // reply messages with reply metadata, push replies.
 //
-// Reconnect/retry, object transfer, TLS, and SuperNode authentication are
-// not implemented yet. The Reconnect field on pull/push responses is ignored,
-// as in the Python grpc-rere client.
+// Reconnect/retry, object transfer, and TLS are not implemented yet. Fleet
+// requests are signed with the node's ECDSA key. The Reconnect field on
+// pull/push responses is ignored, as in the Python grpc-rere client.
 #include "flower_client.h"
 #include "fleet_transport.h"
 #include "heartbeat.h"
 #include "message_codec.h"
+#include "node_credentials.h"
 
 #include <chrono>
 #include <csignal>
@@ -65,11 +66,12 @@ void FlowerClient::run() {
   g_client = this;
   std::signal(SIGINT, signal_handler);
 
-  FleetTransport transport(server_address_);
+  NodeCredentials credentials = NodeCredentials::generate();
+  const std::string public_key = credentials.public_key_pem();
+  FleetTransport transport(server_address_, credentials);
 
-  // Derive a stable public key from the client ID (Phase 1 decision: no
-  // persistence or key management yet).
-  const std::string public_key = "client-" + client_id_;
+  // The public key identifies this node to the SuperLink. A fresh key pair is
+  // generated per process, so each run registers a new node.
 
   std::cout << "Registering node with public key: " << public_key << std::endl;
   uint64_t node_id = transport.register_node(public_key);
@@ -157,8 +159,8 @@ void FlowerClient::run() {
     std::cerr << "Failed to deactivate node" << std::endl;
   }
 
-  // Phase 1 decision: do not unregister; the identity is intended to be
-  // reused across runs.
+  // Phase 1 decision: do not unregister. Each run generates a new key pair and
+  // registers a new node, so unregistering would leave stale nodes behind.
   std::cout << "Client shut down" << std::endl;
 }
 

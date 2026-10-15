@@ -15,12 +15,33 @@
 // fleet_transport.cc
 #include "fleet_transport.h"
 
+#include <ctime>
 #include <iostream>
 
 namespace flwr_local {
 
+namespace {
+
+// Current UTC time as ISO-8601 with second precision, e.g. 2026-01-31T12:00:00Z.
+std::string utc_timestamp() {
+  std::time_t now = std::time(nullptr);
+  std::tm utc{};
+#ifdef _WIN32
+  gmtime_s(&utc, &now);
+#else
+  gmtime_r(&now, &utc);
+#endif
+  char buf[32];
+  std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utc);
+  return buf;
+}
+
+}  // namespace
+
 FleetTransport::FleetTransport(const std::string& server_address,
-                               int grpc_max_message_length) {
+                               NodeCredentials credentials,
+                               int grpc_max_message_length)
+    : credentials_(std::move(credentials)) {
   grpc::ChannelArguments args;
   args.SetMaxReceiveMessageSize(grpc_max_message_length);
   args.SetMaxSendMessageSize(grpc_max_message_length);
@@ -32,12 +53,20 @@ FleetTransport::FleetTransport(const std::string& server_address,
   stub_ = flwr::proto::Fleet::NewStub(channel);
 }
 
+void FleetTransport::add_auth_metadata(grpc::ClientContext* context) const {
+  const std::string timestamp = utc_timestamp();
+  context->AddMetadata("flwr-public-key-bin", credentials_.public_key_pem());
+  context->AddMetadata("flwr-timestamp", timestamp);
+  context->AddMetadata("flwr-signature-bin", credentials_.sign(timestamp));
+}
+
 uint64_t FleetTransport::register_node(const std::string& public_key) {
   flwr::proto::RegisterNodeFleetRequest request;
   request.set_public_key(public_key);
 
   flwr::proto::RegisterNodeFleetResponse response;
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->RegisterNode(&context, request, &response);
   if (!status.ok()) {
     std::cerr << "RegisterNode RPC failed: " << status.error_message()
@@ -55,6 +84,7 @@ uint64_t FleetTransport::activate_node(const std::string& public_key,
 
   flwr::proto::ActivateNodeResponse response;
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->ActivateNode(&context, request, &response);
   if (!status.ok()) {
     std::cerr << "ActivateNode RPC failed: " << status.error_message()
@@ -70,6 +100,7 @@ bool FleetTransport::deactivate_node(uint64_t node_id) {
 
   flwr::proto::DeactivateNodeResponse response;
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->DeactivateNode(&context, request, &response);
   if (!status.ok()) {
     std::cerr << "DeactivateNode RPC failed: " << status.error_message()
@@ -85,6 +116,7 @@ bool FleetTransport::unregister_node(uint64_t node_id) {
 
   flwr::proto::UnregisterNodeFleetResponse response;
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->UnregisterNode(&context, request, &response);
   if (!status.ok()) {
     std::cerr << "UnregisterNode RPC failed: " << status.error_message()
@@ -102,6 +134,7 @@ bool FleetTransport::send_node_heartbeat(uint64_t node_id,
 
   flwr::proto::SendNodeHeartbeatResponse response;
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->SendNodeHeartbeat(&context, request, &response);
   if (!status.ok()) {
     std::cerr << "SendNodeHeartbeat RPC failed: " << status.error_message()
@@ -117,6 +150,7 @@ bool FleetTransport::pull_messages(
   request.mutable_node()->set_node_id(node_id);
 
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->PullMessages(&context, request, response);
   if (!status.ok()) {
     std::cerr << "PullMessages RPC failed: " << status.error_message()
@@ -130,6 +164,7 @@ bool FleetTransport::push_messages(
     uint64_t node_id, const flwr::proto::PushMessagesRequest& request,
     flwr::proto::PushMessagesResponse* response) {
   grpc::ClientContext context;
+  add_auth_metadata(&context);
   grpc::Status status = stub_->PushMessages(&context, request, response);
   if (!status.ok()) {
     std::cerr << "PushMessages RPC failed: " << status.error_message()

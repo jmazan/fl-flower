@@ -273,6 +273,81 @@ There are two ways to run the Flower server side:
 
 **Decision:** the first deliverable targets the `flower-superlink` + `flwr run` combination, since the C++ client always talks to the SuperLink’s Fleet API regardless of how the ServerApp is launched. The client itself is agnostic to the server-side launch mode; supporting `flwr run`-only orchestration later (e.g., SuperLink auto-start) must not block this design.
 
+## Connection setup: machine A (server) and machine B (C++ client)
+
+This follows the Flower architecture: the SuperLink is the only component the client talks to. The SuperExec and ServerApp are launched by the SuperLink on machine A, and `flwr run` submits the app to the SuperLink's Control API. Machine B only runs the native client.
+
+> **Prerequisite (blocker for the quickstart-cpp client):** the legacy C++ client in this example calls the `CreateNode` and `PullTaskIns` RPCs. The current `fleet.proto` does not define them, so a current SuperLink returns `UNIMPLEMENTED` and that client cannot register. The migrated client in `examples/embedded_cpp_client` uses the current Fleet API (`RegisterNode`, `PullMessages`, `PushMessages`) with signed requests, and is the path to use for steps B1–B2. Step A can be run and verified on its own.
+
+### Ports used
+
+| Port | Service | Bind address | Who connects |
+|------|---------|--------------|--------------|
+| 9092 | Fleet API (`grpc-rere`, plaintext gRPC) | `0.0.0.0:9092` on A | Machine B (C++ client) |
+| 9093 | Control API (used by `flwr run`) | `127.0.0.1:9093` on A | Local `flwr run` only |
+| 8000 | Runtime / Control HTTP API | localhost only (default) | Not needed for this setup |
+
+The Flower network doc lists 8000 as the SuperLink Fleet API default. That is the HTTP transport. The C++ client needs the gRPC-rere transport on 9092, so `--fleet-api-type grpc-rere --fleet-api-address 0.0.0.0:9092` must be passed explicitly.
+
+### Step A: start the server on machine A
+
+1. Install the Python dependencies for the example, from `examples/quickstart-cpp`:
+
+   ```bash
+   pip install -e .
+   ```
+
+2. Start the SuperLink. Keep the Control API on localhost and expose only the Fleet API:
+
+   ```bash
+   flower-superlink --insecure \
+     --fleet-api-type grpc-rere --fleet-api-address 0.0.0.0:9092 \
+     --control-api-address 127.0.0.1:9093
+   ```
+
+   `--insecure` disables TLS and is for a trusted network only. The default `subprocess` isolation auto-starts the SuperExec, which launches `server:app`.
+
+3. Open TCP port 9092 on machine A's firewall for machine B only. Do not expose 9093 or 8000.
+
+4. Register the running SuperLink in the Flower config, `~/.flwr/config.toml` (on Windows, `%USERPROFILE%\.flwr\config.toml`; override the directory with `FLWR_HOME`). Do not rely on the shipped default `local` connection. It starts a separate in-process SuperLink, so the run would not reach the server started in step 2:
+
+   ```toml
+   [superlink]
+   default = "machine-a"
+
+   [superlink.machine-a]
+   address = "127.0.0.1:9093"
+   insecure = true
+   ```
+
+5. Submit the ServerApp to that SuperLink and stream its logs:
+
+   ```bash
+   flwr run examples/quickstart-cpp machine-a --stream
+   ```
+
+   Start step B so the client can register; without a connected client the run cannot complete a round.
+
+### Step B: run the C++ client on machine B
+
+1. Use the already-built binary. The client takes a node ID and the SuperLink Fleet address:
+
+   ```bash
+   ./build/flwr_client 0 <machine-A-host-or-ip>:9092
+   ```
+
+   Use a host or IP that machine B can reach. Do not use `127.0.0.1`, which points to machine B itself.
+
+2. Expected result with the legacy quickstart-cpp client: registration fails with `UNIMPLEMENTED` for `/flwr.proto.Fleet/CreateNode`. This confirms the network path works, but this client cannot run against the current SuperLink.
+
+3. Expected result with the `examples/embedded_cpp_client` client: it generates a key pair, calls `RegisterNode` and `ActivateNode` with signed metadata, and then receives the `ServerApp` messages. The `flwr run --stream` output on machine A shows the rounds progressing. The migrated client has not yet been verified end to end against a live SuperLink; see the build-and-test notes in `examples/embedded_cpp_client`.
+
+### Verification checklist
+
+- On machine A, `flower-superlink` logs that the Fleet API is listening on `0.0.0.0:9092`.
+- From machine B, the port is reachable (for example `Test-NetConnection <A> -Port 9092` on Windows, or `nc -vz <A> 9092`). A reachable port with an `UNIMPLEMENTED` error means the network path works.
+- `flwr run` on machine A reports a run created against `machine-a`, not `local`.
+
 ## Additional issues worth fixing
 
 - `train_SGD` initializes `data_indices` with `dataset.size()` zeroes and then appends the real indices, producing an incorrect index array.

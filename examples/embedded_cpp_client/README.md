@@ -94,11 +94,11 @@ flower-superlink --insecure --fleet-api-type grpc-rere --fleet-api-address 0.0.0
 
 The existing `server.py` / `fedavg_cpp.py` from `examples/quickstart-cpp/` are
 used as-is (legacy `Strategy` API, supported through Flower's compatibility
-mode). They must live in a Flower app directory for `flwr run`. `examples/quickstart-cpp`
-has no `pyproject.toml`, so add one to that directory before running `flwr run`:
+mode). The directory includes a `pyproject.toml` that registers `server.py` as
+the Flower ServerApp. From the repository root, run:
 
 ```bash
-flwr run <server-app-directory> --stream
+flwr run examples/quickstart-cpp --stream
 ```
 
 ### 3. Start the C++ clients (NanoPI)

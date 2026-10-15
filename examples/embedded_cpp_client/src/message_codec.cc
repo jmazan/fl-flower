@@ -29,6 +29,9 @@ namespace {
 constexpr const char* MSG_TYPE_TRAIN = "train";
 constexpr const char* MSG_TYPE_EVALUATE = "evaluate";
 constexpr const char* MSG_TYPE_GET_PARAMETERS = "get_parameters";
+// Current Flower name for the get-parameters request. The legacy name above is
+// kept for SuperNodes running the compat client.
+constexpr const char* MSG_TYPE_QUERY = "query";
 
 constexpr const char* KEY_FIT_PARAMETERS = "fitins.parameters";
 constexpr const char* KEY_FIT_CONFIG = "fitins.config";
@@ -396,7 +399,7 @@ flwr::proto::Message* handle_message(const flwr::proto::Message& incoming,
   if (message_type == MSG_TYPE_EVALUATE) {
     return handle_evaluate(incoming, local_node_id, trainer);
   }
-  if (message_type == MSG_TYPE_GET_PARAMETERS) {
+  if (message_type == MSG_TYPE_GET_PARAMETERS || message_type == MSG_TYPE_QUERY) {
     return handle_get_parameters(incoming, local_node_id, trainer);
   }
 
