@@ -35,8 +35,14 @@ cmake --build build
 ## Run the `Flower SuperLink`, the two clients, and the `Flower ServerApp` in separate terminals
 
 ```bash
-flwr-superlink --insecure
+#flwr-superlink --insecure
+flower-superlink --insecure --fleet-api-type grpc-rere --fleet-api-address 0.0.0.0:9092
 ```
+
+```bash
+flower-server-app server:app --insecure
+```
+
 
 ```bash
 build/flwr_client 0 127.0.0.1:9092
@@ -44,8 +50,4 @@ build/flwr_client 0 127.0.0.1:9092
 
 ```bash
 build/flwr_client 1 127.0.0.1:9092
-```
-
-```bash
-flower-server-app server:app --insecure
 ```

@@ -6,18 +6,19 @@ build-backend = "hatchling.build"
 name = "quickstart-cpp"
 version = "0.1.0"
 description = "Flower ServerApp for the native C++ client example"
+license = "Apache-2.0"
 dependencies = [
     "flwr>=1.36.0",
     "numpy>=2.0.2",
 ]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["server.py", "fedavg_cpp.py"]
+only-include = ["server.py", "fedavg_cpp.py", "client.py"]
 
 [tool.flwr.app]
 publisher = "flwrlabs"
-fab-format-version = 1
 flwr-version-target = "1.36.0"
 
 [tool.flwr.app.components]
 serverapp = "server:app"
+clientapp = "client:app"

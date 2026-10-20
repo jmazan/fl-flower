@@ -147,6 +147,7 @@ set(FLWR_CLIENT_SRCS
   src/heartbeat.cc
   src/message_codec.cc
   src/node_credentials.cc
+  src/object_codec.cc
   src/parameter_codec.cc
   src/trainer.cc
 )

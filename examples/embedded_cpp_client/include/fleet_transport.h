@@ -16,7 +16,8 @@
 //
 // gRPC channel and Fleet stub wrapper. Implements the current Fleet RPCs used
 // by the client lifecycle: RegisterNode, ActivateNode, DeactivateNode,
-// UnregisterNode, SendNodeHeartbeat, PullMessages, PushMessages.
+// UnregisterNode, SendNodeHeartbeat, PullMessages, PushMessages, PullObject,
+// PushObject, ConfirmMessageReceived.
 #ifndef FLEET_TRANSPORT_H
 #define FLEET_TRANSPORT_H
 
@@ -65,6 +66,23 @@ class FleetTransport {
   bool push_messages(uint64_t node_id,
                      const flwr::proto::PushMessagesRequest& request,
                      flwr::proto::PushMessagesResponse* response);
+
+  // Pull one object of a run. Check response->object_available; if false the
+  // object is not ready yet and the call should be retried.
+  bool pull_object(uint64_t node_id, uint64_t run_id,
+                   const std::string& object_id,
+                   flwr::proto::PullObjectResponse* response);
+
+  // Push one object of a run. On success the response is stored in *response.
+  bool push_object(uint64_t node_id, uint64_t run_id,
+                   const std::string& object_id,
+                   const std::string& object_content,
+                   const std::string& session_id,
+                   flwr::proto::PushObjectResponse* response);
+
+  // Tell the SuperLink that all objects of an incoming message were pulled.
+  bool confirm_message_received(uint64_t node_id, uint64_t run_id,
+                                const std::string& message_object_id);
 
  private:
   // Attach the flwr-public-key-bin, flwr-timestamp, and flwr-signature-bin
