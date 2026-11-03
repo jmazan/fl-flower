@@ -368,3 +368,109 @@ There are two ways to run the Flower server side:
 Build a standalone native C++ Fleet client template in a new `examples/embedded_cpp_client/` directory. Implement the current Fleet lifecycle and `Message`/`RecordDict` envelope (Phases 1–2), then use the existing `FedAvgCpp` strategy as a compatibility profile for the first remote-server demo. Keep the trainer behind a narrow C++ interface so the stub can be replaced by the NanoPI ML library without changing the Flower transport. No Python or server-side changes are in scope for the first deliverable.
 
 Use insecure gRPC only on a trusted development network. Add TLS, SuperNode authentication, persistent node identity, object transfer, and reconnect handling before production deployment.
+
+## Memory usage analysis
+
+Memory analysis script is at examples/embedded_cpp_client/tools/map_module_size.awk
+
+Usage:
+
+    cd examples/embedded_cpp_client
+    awk -f tools/map_module_size.awk build/flwr_client.map 2>totals.txt | sort -t$'\t' -k4,4nr
+
+stdout gets rows of module \t image_bytes \t ram_bytes \t total_bytes; the header and grand totals go to stderr (totals.txt above). "image" = bytes stored in the program image = flash on an MCU target; "ram" = bytes resident at runtime (.data + .bss + writable tables).
+
+Validation (this binary, build/flwr_client):
+
+    script TOTAL   image=33,394,446  ram=390,040
+    size           text+data=33,394,446  data+bss=390,040   -> exact match
+
+I also checked every output section's declared size against the sum of its input-section records (all zero-gap) and cross-checked classification with readelf -SW section flags (WA vs A).
+
+Top consumers:
+
+    module                        image      ram     total
+    libgrpc.a                 23,360,040  264,384  23,624,424
+    libprotobuf.a              4,887,965   35,949   4,923,914
+    (linker-synthesized)       1,277,251    4,744   1,281,995
+    libflwr_proto.a              758,619   31,805     790,424
+    libre2.a                     505,201   12,525     517,726
+    flwr_client (own code)       258,147       32     258,179
+    libcares.a                   219,224      816     220,040
+    (fill/alignment)              82,326   13,994      96,320
+    ... 99 modules total
+
+Three quirks of GNU ld map files the script has to handle (each of which silently corrupts the numbers if you skip it):
+
+1. Only parse after the "Linker script and memory map" header — the archive table and "Discarded input sections" before it contain the same file.o line shapes.
+2. Orphan output sections are printed at column 0 WITHOUT a leading dot (protodesc_cold 0x... 0x6a46, malloc_hook, flags_help_cold); if you only recognize .name headers, their bytes get absorbed into .rodata/.text (that cost 29,920 B of misattribution here). The script inherits their RAM/flash class from the neighboring section, which matches how ld places orphans (verified: malloc_hook has AX, protodesc_cold A, linkarr_upb_AllExts WAR flags).
+3. Linker-synthesized sections (.plt, .dynsym, .rela.*, .eh_frame_hdr, .dynamic, …) are attributed to whichever object ld lists first — here that made crt1.o look like 1.3 MB. They're regrouped under the pseudo-module (linker-synthesized).
+
+Memory-classification rules (by output-section name): .bss/.tbss/COMMON → ram only; .data/.got/.init_array/.tdata/.dynamic → both image and ram; code/rodata/eh_frame/plt → image only; .debug/.comment/.stab/.annobin/.gnu.build.attributes → excluded (not loaded). On the arm64/MCU build the same script works — "image" is then literally flash.
+
+Two side notes: this run's classification was tuned against readelf, so residuals are exactly 0 on this binary; and if you want symbol-level (not module-level) detail, nm --print-size --size-sort -C build/flwr_client is the complement. The linux-gcc preset rebuild is still running in the background; its map will be at build/linux-gcc/flwr_client.map and this script applies to it unchanged.
+
+Exact breakdown of build/flwr_client (72,455,496 bytes):
+
+    loadable into memory (what the awk TOTAL counts):
+      code + rodata + data (in file)   33,394,446   <- awk "image"
+      .bss (zero-fill, not in file)       56,344   <- awk "ram" part
+    never loaded, file-only metadata:
+      .strtab (symbol names)           33,779,170   32.2 MiB
+      .symtab (symbol table)            5,267,664    5.0 MiB
+      .debug_*, .comment, .annobin, etc      ~2,400
+      .shstrtab + section headers            3,526
+    ELF/program headers + segment alignment  ~9,300
+                                          -----------
+      total                             72,455,496  ✓
+
+So ~39 MB of the file is just the symbol table and its string table — normal for an unstripped C++ binary (that's where all the long _ZN4absl... names live). strip build/flwr_client would bring the file to ~33.5 MB with zero change to runtime memory; for the embedded/flash case what matters is the loadable image, i.e. the awk numbers.
+
+Two clarifications on the numbers you saw:
+- awk's grand TOTAL line is image=33,394,446  ram=390,040 (two columns, not one 23 MB figure; image and ram overlap on .data, so don't add them).
+- 23 MB was the row for libgrpc.a alone (23,624,424) — gRPC core is ~70% of the whole image.
+
+
+Please review the @_; phase 1 and 2 are already implemented. I want to run phase 3 but for that I would like to use genetic algorithm as implemented by @_. 
+1) analyse the current input configuration of features as defined in @_ and let me know if this feature list shall be extended with some features which are currently fetched into decider LLM context.
+2) propose which fundamental features shall be evaluated using genetic algorithm.
+3) shall we evaluate (run genetic search) on technical and fundamental features separately or shall I create on combined feature list and dataset.
+4) how about target label (fitness function), propose some which would be aligned with the task of decider LLM.
+Propose a detailed plan for phase 3 stage 1, but do not make any changes.
+
+Measured both builds. One important discovery first: the build/ tree you've been looking at was configured with no build type at all (CMAKE_BUILD_TYPE empty in its CMakeCache), so it's a plain -O0 build — its 33 MB image is the worst case, not an optimized figure.
+
+The properly optimized build (build/linux-gcc, CMake Release = -O3 -DNDEBUG, no -g — debug sections are 1.6 KB of stubs) finished, and the awk script validated exactly against size on it again:
+
+    optimized (-O3, no debug)          x86-64 measured
+    loadable image (flash)             15,733,211 B  = 15.0 MiB
+    static RAM (.data+.bss)                340,660 B  = 333 KiB
+    on-disk binary                      21.1 MB unstripped
+    after strip                         15,744,104 B  = 15.0 MiB
+    measured peak RSS (startup→register)     29.0 MiB
+
+so the ballpark you asked for is ~15 MiB image, ~330 KiB static RAM, ~30 MiB RSS early on. Your earlier 33 MB/72 MB numbers were the unoptimized build plus symbol table (.strtab alone was 32 MB; strip removes it and it never loads).
+
+Where the 15 MiB goes (-O3, from the script on the new map):
+
+    libgrpc.a          10,361,932   (66%)
+    libprotobuf.a       1,938,734
+    flwr_client (own)   1,107,131
+    libflwr_proto.a       491,013
+    libre2.a              377,919
+    (linker-synthesized)  284,871
+    ... 98 modules, TOTAL 15,733,211 image / 340,660 ram
+
+Verdict for the NanoPi with 150 MB: the binary is not the problem — nothing in the code/image side must be optimized. Ballpark steady state is 30–45 MiB RSS: ~333 KiB static data, ~25 MiB heap (measured: gRPC channel + TLS/ECDSA + datasets), ~15 MiB of file-backed text/rodata — and file-backed pages are shared with the page cache and reclaimable under pressure. Even if every text page gets touched you stay under ~45 MiB.
+
+What actually scales against your 150 MB is heap data, not code:
+- parameter_codec serializes whole model tensors into protobuf messages and std::strings — several transient copies of the full parameter vector per round. Budget roughly 2–4× model size at peak.
+- Datasets grow with sample count (the current synthetic 1000/100/500 samples is ~15 KB — irrelevant; real per-node data isn't).
+
+So budget: 150 MB − (~45 MB runtime floor) ≈ 100 MB for model parameters + data + gRPC traffic buffers, and you're fine.
+
+Notes before you cross compile:
+- -O2 specifically: this measurement is -O3 (CMake Release). -O2 lands within a few % of these numbers (often slightly smaller); if flash/size ever matters, -Os (MINSIZEREL) is the lever. To force exactly -O2: -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG".
+- aarch64 code size is typically within ±10% of these x86-64 figures — same ballpark, confirm on-device with the same script.
+- Blocker on this host: no ARM cross compiler installed — aarch64-linux-gnu-g++ is not on PATH (the toolchain file expects it), and the cross preset also needs host protoc + grpc_cpp_plugin on PATH. You'll need g++-aarch64-linux-gnu (or the Fedora gcc-c++ aarch64 cross package) before cmake --preset linux-arm64-cross will configure.
+- The -O3 map file is at build/linux-gcc/flwr_client.map (23 MB); awk -f tools/map_module_size.awk works on it unchanged.

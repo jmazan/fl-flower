@@ -1,5 +1,5 @@
 # CMake toolchain file for cross-compiling the Flower C++ client to 64-bit ARM
-# Linux (e.g. NanoPi). Use with:
+# Linux (e.g. NanoPi boards with Cortex-A53+ SoCs). Use with:
 #   cmake --preset linux-arm64-cross
 #
 # Requires the aarch64 GNU cross compiler on the host. Override the compilers

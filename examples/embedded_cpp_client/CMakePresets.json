@@ -45,6 +45,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "linux-armv7-cross",
+      "displayName": "Linux ARMv7 cross-compile (NanoPi Cortex-A7)",
+      "description": "Cross-compile for 32-bit ARMv7 hard-float Linux (Cortex-A7). Needs an arm-linux-gnueabihf toolchain and host protoc/grpc_cpp_plugin on PATH. Pass -DFLWR_ARMV7_SYSROOT=<target-rootfs> to link against target libraries.",
+      "inherits": "base",
+      "generator": "Unix Makefiles",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-armv7.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -60,6 +71,10 @@
     {
       "name": "linux-arm64-cross",
       "configurePreset": "linux-arm64-cross"
+    },
+    {
+      "name": "linux-armv7-cross",
+      "configurePreset": "linux-armv7-cross"
     }
   ]
 }

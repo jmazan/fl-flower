@@ -54,21 +54,40 @@ FetchContent_Declare(
   GIT_TAG        ${GRPC_VERSION}
 )
 set(FETCHCONTENT_QUIET OFF)
-FetchContent_MakeAvailable(gRPC)
 
 set(_PROTOBUF_LIBPROTOBUF libprotobuf)
 set(_REFLECTION grpc++_reflection)
 set(_GRPC_GRPCPP grpc++)
+# The protoc and grpc_cpp_plugin built by the cross build target the device
+# architecture and cannot run on the host. Use host binaries instead: from
+# PATH, or (version-matched) from a native build of this example, whose
+# outputs land in build/_deps/grpc-build or build/linux-gcc/_deps/grpc-build.
+# Their versions must match the bundled protobuf and gRPC ${GRPC_VERSION}.
+# Resolved BEFORE FetchContent_MakeAvailable: gRPC's own codegen (reflection,
+# channelz, health protos) runs bare find_program(_gRPC_CPP_PLUGIN ...) and
+# find_program(_gRPC_PROTOBUF_PROTOC_EXECUTABLE ...) when cross-compiling and
+# would cache -NOTFOUND, failing the build with
+# "No rule to make target '_gRPC_CPP_PLUGIN-NOTFOUND'". Seeding those cache
+# entries first makes gRPC pick up the same host binaries.
 if(CMAKE_CROSSCOMPILING)
-    # The protoc and grpc_cpp_plugin built above target the device architecture
-    # and cannot run on the host. Use host binaries from PATH instead. Their
-    # versions must match the bundled protobuf and gRPC ${GRPC_VERSION}.
-    find_program(_PROTOBUF_PROTOC protoc REQUIRED)
-    find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin REQUIRED)
+    find_program(_PROTOBUF_PROTOC protoc REQUIRED
+      HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/grpc-build/third_party/protobuf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/build/linux-gcc/_deps/grpc-build/third_party/protobuf")
+    find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin REQUIRED
+      HINTS "${CMAKE_CURRENT_SOURCE_DIR}/build/_deps/grpc-build"
+            "${CMAKE_CURRENT_SOURCE_DIR}/build/linux-gcc/_deps/grpc-build")
+    set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE "${_PROTOBUF_PROTOC}" CACHE FILEPATH
+        "Host protoc used by gRPC's codegen when cross-compiling" FORCE)
+    set(_gRPC_CPP_PLUGIN "${_GRPC_CPP_PLUGIN_EXECUTABLE}" CACHE FILEPATH
+        "Host grpc_cpp_plugin used by gRPC's codegen when cross-compiling" FORCE)
+    message(STATUS "Host protoc: ${_PROTOBUF_PROTOC}")
+    message(STATUS "Host grpc_cpp_plugin: ${_GRPC_CPP_PLUGIN_EXECUTABLE}")
 else()
     set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
     set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 endif()
+
+FetchContent_MakeAvailable(gRPC)
 
 # ---------------------------------------------------------------------------
 # Generate current Flower protobufs into the build tree
@@ -157,6 +176,12 @@ add_executable(${EXECUTABLE_NAME} ${FLWR_CLIENT_SRCS})
 
 target_include_directories(${EXECUTABLE_NAME} PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+# Emit a linker map so section/symbol sizes can be inspected for the embedded
+# target (size analysis, dead-strip debugging).
+target_link_options(${EXECUTABLE_NAME} PRIVATE
+  "-Wl,-Map,${CMAKE_BINARY_DIR}/${EXECUTABLE_NAME}.map"
 )
 
 target_link_libraries(${EXECUTABLE_NAME}

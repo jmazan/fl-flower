@@ -59,23 +59,46 @@ provided for native Windows builds but has not been verified.
 
 ### Cross-compiling for ARM (NanoPI)
 
-The `linux-arm64-cross` preset uses `cmake/toolchain-arm64.cmake` for an
-aarch64 Linux target. Requirements:
+The presets are named after the target architecture:
 
-- The aarch64 GNU cross compiler (`aarch64-linux-gnu-gcc` and
-  `aarch64-linux-gnu-g++`). Pass `-DCMAKE_C_COMPILER` and
+- `linux-arm64-cross` — aarch64 Linux (64-bit ARMv8), via
+  `cmake/toolchain-arm64.cmake`.
+- `linux-armv7-cross` — 32-bit ARMv7 hard-float Linux (Cortex-A7, e.g. the
+  original NanoPi boards), via `cmake/toolchain-armv7.cmake`.
+
+> [!IMPORTANT]\
+> The Cortex-A7 is a 32-bit ARMv7 CPU and cannot run aarch64 binaries. Use the
+> `linux-armv7-cross` preset with an `arm-linux-gnueabihf` toolchain (Debian's
+> `gcc-arm-linux-gnueabihf`, or the official Arm GNU Toolchain
+> `arm-none-linux-gnueabihf`). Fedora's `gcc-arm-linux-gnu` package is the
+> soft-float ABI and is not compatible with the NanoPi's hard-float rootfs.
+
+Requirements for both cross presets:
+
+- A GNU cross compiler for the target. Pass `-DCMAKE_C_COMPILER` and
   `-DCMAKE_CXX_COMPILER` to use other compilers.
-- Optional: `-DFLWR_ARM64_SYSROOT=/path/to/target-rootfs` to link against the
-  target's libraries.
+- A target rootfs for the sysroot, passed as
+  `-DFLWR_ARM64_SYSROOT=<dir>` or `-DFLWR_ARMV7_SYSROOT=<dir>`. The rootfs
+  needs OpenSSL 3 dev files (`libssl-dev` on Debian/Armbian) and glibc dev
+  files.
 - Host `protoc` and `grpc_cpp_plugin` on `PATH`. They must match the bundled
   protobuf and gRPC `v1.78.1`, because the build runs them to generate code.
+  Build them once with the native preset:
+
+  ```bash
+  cmake --preset linux-gcc
+  cmake --build --preset linux-gcc --target protoc grpc_cpp_plugin
+  export PATH="$PWD/build/linux-gcc/_deps/grpc-build:$PWD/build/linux-gcc/_deps/grpc-build/third_party/protobuf:$PATH"
+  ```
 
 ```bash
-cmake --preset linux-arm64-cross
-cmake --build --preset linux-arm64-cross
+cmake --preset linux-armv7-cross -DFLWR_ARMV7_SYSROOT=/path/to/nanopi-rootfs
+cmake --build --preset linux-armv7-cross
 ```
 
-The executable is `build/linux-arm64-cross/flwr_client`.
+The executable is `build/linux-armv7-cross/flwr_client`. Verify with
+`file build/linux-armv7-cross/flwr_client` (expect "ELF 32-bit LSB
+executable, ARM, EABI5").
 
 > [!NOTE]\
 > The cross build is not yet verified. gRPC builds its own `protoc` for the
@@ -152,9 +175,11 @@ which decodes tensors with `struct.unpack("d", ...)`.
 ```text
 embedded_cpp_client/
    CMakeLists.txt
-   CMakePresets.json        # windows-msvc, linux-gcc, linux-arm64-cross
+   CMakePresets.json        # windows-msvc, linux-gcc, linux-arm64-cross,
+                            # linux-armv7-cross
    cmake/
-      toolchain-arm64.cmake # aarch64 Linux cross-compile
+      toolchain-arm64.cmake # aarch64 (64-bit ARM) Linux cross-compile
+      toolchain-armv7.cmake # ARMv7 hard-float Linux cross-compile (Cortex-A7)
    include/
       flower_client.h       # public lifecycle API
       flower_trainer.h      # model/training callback interface
